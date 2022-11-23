@@ -1,0 +1,210 @@
+---
+title: "JM Package Example"
+author: "Jared Strauch"
+date: "11/14/2022"
+output: html_document
+---
+
+Preamble
+
+- Package fits joint models for longitudinal and time-to-event data using maximum likelihood
+
+- Applicable in 2 settings:
+  1) when focus is on the survival outcome and we wish to account for the effect of an endogenous (aka internal) time-dependent covariates measured with error
+  2) when focus is on the longitudinal outcome and we wish to correct for nonrandom dropout
+
+- Basic joint-model-fitting function is jointModel(). 
+-- Accepts as main arguments a linear mixed model fitted by function lme() from the nlme package and a Cox model fitted using function coxph() from the survival package
+
+
+
+jointModel:
+This function fits shared parameter models for the joint modelling of normal longitudinal responses and time-to-event data under a maximum likelihood approach.
+```{r}
+library(JM)
+library(MASS)
+library(nlme)
+library(splines)
+library(survival)
+data(aids)
+data(aids.id)
+# linear mixed model fit with random intercept
+# need to include interaction between time and covariate of interest in the mixed model
+fitLME <- lme(sqrt(CD4) ~ obstime * drug - drug, random = ~ 1 | patient, data = aids)
+# cox model fit
+fitCOX <- coxph(Surv(Time, death) ~ drug, data = aids.id, x = TRUE)
+# joint model fit with a spline-approximated baseline hazard function
+fitJOINT <- jointModel(fitLME, fitCOX, timeVar = "obstime", method = "spline-PH-aGH")
+fitJOINT
+summary(fitJOINT)
+cox <- coxph(Surv(Time, death) ~ drug, data = aids)
+
+loglik <- c(fitJOINT$logLik, cox$loglik[2])
+aic <- c(AIC(fitJOINT), AIC(cox))
+bic <- c(BIC(fitJOINT),BIC(cox))
+
+fit.check <- data.frame(loglik, aic, bic)
+rownames(fit.check) <- c('Joint Model', 'Cox Model')
+colnames(fit.check) <- c('Log Likelihood', 'AIC', 'BIC')
+fit.check
+```
+Options for method:
+"weibull-AFT-GH" a time-dependent Weibull model under the accelerated failure time formulation is assumed. 
+
+"weibull-PH-GH" a time-dependent relative risk model is postulated with a Weibull baseline risk function. 
+
+"piecewise-PH-GH" a time-dependent relative risk model is postulated with a piecewise constant baseline risk function. 
+
+"spline-PH-GH" a time-dependent relative risk model is assumed in which the log baseline risk
+function is approximated using B-splines. If we want to stratify on a covariate we need to use this method. 
+
+"ch-Laplace" an additive model on the log cumulative hazard scale is assumed. 
+
+"Cox-PH-GH" a time-dependent relative risk model is assumed where the baseline risk
+function is left unspecified
+
+
+aucJM:
+Using the available longitudinal information up to a starting time point, this function computes an estimate of the prediction error of survival at a horizon time point based on joint models.
+```{r}
+###Takes forever to run or just doesn't work
+
+# we construct the composite event indicator (transplantation or death)
+pbc2$status2 <- as.numeric(pbc2$status != "alive")
+pbc2.id$status2 <- as.numeric(pbc2.id$status != "alive")
+# we fit the joint model using splines for the subject-specific
+# longitudinal trajectories and a spline-approximated baseline
+# risk function
+lmeFit <- lme(log(serBilir) ~ ns(year, 3), random = list(id = pdDiag(form = ~ ns(year, 3))), data = pbc2)
+survFit <- coxph(Surv(years, status2) ~ drug, data = pbc2.id, x = TRUE)
+jointFit <- jointModel(lmeFit, survFit, timeVar = "year", method = "piecewise-PH-aGH")
+# AUC using data up to year 5 with horizon at year 8
+aucJM(jointFit, pbc2, Tstart = 5, Thoriz = 8)
+```
+
+
+Plot:
+Produces a variety of plots for fitted joint models.
+```{r}
+plot(fitJOINT)
+```
+The plots of the baseline hazard and the cumulative baseline hazard are only produced when the
+joint model has been fitted using method = "Cox-PH-GH".
+
+plot.survfitJM:
+Produces plots of conditional probabilities of survival.
+```{r}
+ND <- aids[aids$patient == "141", ]
+ss <- survfitJM(fitJOINT, newdata = ND, idVar = "patient", M = 50)
+plot(ss)
+plot(ss, include.y = TRUE, add.last.time.axis.tick = TRUE, legend = TRUE)
+```
+
+
+Predict:
+Calculates predicted values for the longitudinal part of a joint model.
+```{r}
+# linear mixed model fit
+fitLME <- lme(log(serBilir) ~ drug * year, random = ~ year | id, data = pbc2)
+# survival regression fit
+fitSURV <- survreg(Surv(years, status2) ~ drug, data = pbc2.id, x = TRUE)
+# joint model fit, under the (default) Weibull model
+fitJOINT <- jointModel(fitLME, fitSURV, timeVar = "year")
+# create data frame with different values for drug and year to use in prediction
+DF <- with(pbc2, expand.grid(drug = levels(drug),
+year = seq(min(year), max(year), len = 100)))
+
+Ps <- predict(fitJOINT, DF, interval = "confidence", return = TRUE)
+require(lattice)
+xyplot(pred + low + upp ~ year | drug, data = Ps,
+type = "l", col = c(2,1,1), lty = c(1,2,2), lwd = 2,
+ylab = "Average log serum Bilirubin")
+```
+When type = "Marginal", this function computes predicted values for the fixed-effects part of
+the longitudinal submodel.
+
+When type = "Subject", this functions computes subject-specific predictions for the longitudinal
+outcome based on the joint model.
+
+
+rocJM:
+It computes sensitivity, specificity, ROC and AUC measures for joint models.
+```{r}
+###Takes forever to run or just doesn't work
+
+fitLME <- lme(sqrt(CD4) ~ obstime + obstime:(drug + AZT + prevOI + gender), 
+random = ~ obstime | patient, data = aids)
+fitSURV <- coxph(Surv(Time, death) ~ drug + AZT + prevOI + gender, data = aids.id, x = TRUE)
+fit.aids <- jointModel(fitLME, fitSURV, timeVar = "obstime",
+method = "piecewise-PH-aGH")
+ND <- aids[aids$patient == "7", ]
+roc <- rocJM(fit.aids, dt = c(2, 4, 8), ND, idVar = "patient")
+plot(roc, lwd = 2, legend = TRUE)
+plot(roc, type = "AUC")
+```
+
+dt = a numeric vector indicating the lengths of the time intervals of primary interest within which we want to distinguish between subjects who died within the
+intervals from subjects who survived longer than that.
+
+
+residuals:
+Calculates residuals for joint models
+```{r}
+# residuals for the longitudinal outcome
+head(cbind(
+"Marginal" = residuals(fitJOINT),
+"std-Marginal" = residuals(fitJOINT, type = "stand-Marginal"),
+"Subject" = residuals(fitJOINT, type = "Subject"),
+"std-Subject" = residuals(fitJOINT, type = "stand-Subject")
+))
+# residuals for the survival outcome
+head(cbind(
+"Martingale" = residuals(fitJOINT, process = "Event", type = "Martingale"),
+"CoxSnell" = residuals(fitJOINT, process = "Event", type = "CoxSnell")
+))
+```
+if type = "Marginal" these are eij = yij − xij^Tβ, whereas for type = "Subject",
+eij = yij − xij^Tβˆ − zij^Tbi, where i denotes the subject and j the measurement, yij the longitudinal responses, xij^T and zij^T the corresponding rows of the fixed and random effects design matrices, respectively, and β and bi denote the fixed effects and random effects components.
+
+
+Martingale residuals are available for all options for the survival submodel.
+
+Cox-Snell residuals are available for the Weibull model and the additive log cumulative hazard model. 
+
+AFT residuals are only available for the Weibull model.
+
+
+# Julia's code - same as above, not working
+
+```{r}
+if (FALSE) {
+fitLME <- lme(sqrt(CD4) ~ obstime * (drug + AZT + prevOI + gender), 
+    random = ~ obstime | patient, data = aids)
+fitSURV <- coxph(Surv(Time, death) ~ drug + AZT + prevOI + gender, 
+    data = aids.id, x = TRUE)
+fit.aids <- jointModel(fitLME, fitSURV, timeVar = "obstime", 
+    method = "piecewise-PH-aGH")
+
+# the following will take some time to execute...
+ND <- aids[aids$patient == "7", ]
+roc <- rocJM(fit.aids, dt = c(2, 4, 8), ND, idVar = "patient")
+roc
+}
+```
+
+```{r}
+if (FALSE) {
+fitLME <- lme(sqrt(CD4) ~ obstime + obstime:(drug + AZT + prevOI + gender), 
+    random = ~ obstime | patient, data = aids)
+fitSURV <- coxph(Surv(Time, death) ~ drug + AZT + prevOI + gender, 
+    data = aids.id, x = TRUE)
+fit.aids <- jointModel(fitLME, fitSURV, timeVar = "obstime", 
+    method = "piecewise-PH-aGH")
+
+ND <- aids[aids$patient == "7", ]
+roc <- rocJM(fit.aids, dt = c(2, 4, 8), ND, idVar = "patient")
+plot(roc, lwd = 2, legend = TRUE)
+plot(roc, type = "AUC")
+}
+```
+
