@@ -64,23 +64,6 @@ function is approximated using B-splines. If we want to stratify on a covariate 
 function is left unspecified
 
 
-aucJM:
-Using the available longitudinal information up to a starting time point, this function computes an estimate of the prediction error of survival at a horizon time point based on joint models.
-```{r}
-###Takes forever to run or just doesn't work
-
-# we construct the composite event indicator (transplantation or death)
-pbc2$status2 <- as.numeric(pbc2$status != "alive")
-pbc2.id$status2 <- as.numeric(pbc2.id$status != "alive")
-# we fit the joint model using splines for the subject-specific
-# longitudinal trajectories and a spline-approximated baseline
-# risk function
-lmeFit <- lme(log(serBilir) ~ ns(year, 3), random = list(id = pdDiag(form = ~ ns(year, 3))), data = pbc2)
-survFit <- coxph(Surv(years, status2) ~ drug, data = pbc2.id, x = TRUE)
-jointFit <- jointModel(lmeFit, survFit, timeVar = "year", method = "piecewise-PH-aGH")
-# AUC using data up to year 5 with horizon at year 8
-aucJM(jointFit, pbc2, Tstart = 5, Thoriz = 8)
-```
 
 
 Plot:
@@ -91,6 +74,9 @@ plot(fitJOINT)
 The plots of the baseline hazard and the cumulative baseline hazard are only produced when the
 joint model has been fitted using method = "Cox-PH-GH".
 
+
+
+
 plot.survfitJM:
 Produces plots of conditional probabilities of survival.
 ```{r}
@@ -100,51 +86,6 @@ plot(ss)
 plot(ss, include.y = TRUE, add.last.time.axis.tick = TRUE, legend = TRUE)
 ```
 
-
-Predict:
-Calculates predicted values for the longitudinal part of a joint model.
-```{r}
-# linear mixed model fit
-fitLME <- lme(log(serBilir) ~ drug * year, random = ~ year | id, data = pbc2)
-# survival regression fit
-fitSURV <- survreg(Surv(years, status2) ~ drug, data = pbc2.id, x = TRUE)
-# joint model fit, under the (default) Weibull model
-fitJOINT <- jointModel(fitLME, fitSURV, timeVar = "year")
-# create data frame with different values for drug and year to use in prediction
-DF <- with(pbc2, expand.grid(drug = levels(drug),
-year = seq(min(year), max(year), len = 100)))
-
-Ps <- predict(fitJOINT, DF, interval = "confidence", return = TRUE)
-require(lattice)
-xyplot(pred + low + upp ~ year | drug, data = Ps,
-type = "l", col = c(2,1,1), lty = c(1,2,2), lwd = 2,
-ylab = "Average log serum Bilirubin")
-```
-When type = "Marginal", this function computes predicted values for the fixed-effects part of
-the longitudinal submodel.
-
-When type = "Subject", this functions computes subject-specific predictions for the longitudinal
-outcome based on the joint model.
-
-
-rocJM:
-It computes sensitivity, specificity, ROC and AUC measures for joint models.
-```{r}
-###Takes forever to run or just doesn't work
-
-fitLME <- lme(sqrt(CD4) ~ obstime + obstime:(drug + AZT + prevOI + gender), 
-random = ~ obstime | patient, data = aids)
-fitSURV <- coxph(Surv(Time, death) ~ drug + AZT + prevOI + gender, data = aids.id, x = TRUE)
-fit.aids <- jointModel(fitLME, fitSURV, timeVar = "obstime",
-method = "piecewise-PH-aGH")
-ND <- aids[aids$patient == "7", ]
-roc <- rocJM(fit.aids, dt = c(2, 4, 8), ND, idVar = "patient")
-plot(roc, lwd = 2, legend = TRUE)
-plot(roc, type = "AUC")
-```
-
-dt = a numeric vector indicating the lengths of the time intervals of primary interest within which we want to distinguish between subjects who died within the
-intervals from subjects who survived longer than that.
 
 
 residuals:
@@ -172,6 +113,49 @@ Martingale residuals are available for all options for the survival submodel.
 Cox-Snell residuals are available for the Weibull model and the additive log cumulative hazard model. 
 
 AFT residuals are only available for the Weibull model.
+
+
+
+Predict:
+Calculates predicted values for the longitudinal part of a joint model.
+```{r}
+DF <- with(aids, expand.grid(drug = levels(drug),
+obstime = seq(min(obstime), max(obstime), len = 100)))
+
+Ps <- predict(fitJOINT, DF, interval = "confidence", return = TRUE)
+require(lattice)
+xyplot(pred + low + upp ~ obstime | drug, data = Ps,
+type = "l", col = c(2,1,1), lty = c(1,2,2), lwd = 2,
+ylab = "Average log serum Bilirubin")
+```
+When type = "Marginal", this function computes predicted values for the fixed-effects part of
+the longitudinal submodel.
+
+When type = "Subject", this functions computes subject-specific predictions for the longitudinal
+outcome based on the joint model.
+
+
+
+aucJM:
+Using the available longitudinal information up to a starting time point, this function computes an estimate of the prediction error of survival at a horizon time point based on joint models.
+```{r}
+aucJM(fitJOINT, aids.id, idVar = 'patient', Tstart = 5, Thoriz = 15)
+```
+
+
+
+rocJM:
+It computes sensitivity, specificity, ROC and AUC measures for joint models.
+```{r}
+ND <- aids[aids$patient == "7", ]
+roc <- rocJM(fitJOINT, dt = c(2, 4, 8), ND, idVar = "patient")
+plot(roc, lwd = 2, legend = TRUE)
+plot(roc, type = "AUC", ylim = c(0,1))
+```
+
+dt = a numeric vector indicating the lengths of the time intervals of primary interest within which we want to distinguish between subjects who died within the
+intervals from subjects who survived longer than that.
+
 
 
 # Julia's code - same as above, not working
